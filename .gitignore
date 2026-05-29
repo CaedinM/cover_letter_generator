@@ -1,0 +1,33 @@
+# Secrets & API keys
+.env
+.env.*
+!.env.example
+
+# Personal reference files (contain private background/experience info)
+references/my_experience.md
+references/good_examples.md
+
+# Generated cover letters (contain personal job application content)
+saved_letters/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Claude Code session data
+.claude/settings.local.json
+
+# Arize observability (local debugging only)
+src/instrumentation.py
+.agents/
+.claude/skills/
+skills-lock.json
+
+# macOS
+.DS_Store
