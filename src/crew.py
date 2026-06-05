@@ -278,7 +278,6 @@ END OF EXAMPLES"""
         - Robotic sentence patterns that all start the same way
         - Excessive formality or stiffness
         - Filler sentences that don't add value
-        - Em dashes "--"
 
         ENSURE the letter has:
         - Natural sentence variety (different lengths, structures)
@@ -312,6 +311,10 @@ END OF EXAMPLES"""
     return crew
 
 
+def _clean_letter(text: str) -> str:
+    return text.replace("—", ", ").replace("--", ", ")
+
+
 def generate_cover_letter(
     job_title: str,
     company_name: str,
@@ -321,7 +324,7 @@ def generate_cover_letter(
     """Generate a cover letter for the given job."""
     crew = create_cover_letter_crew(job_title, company_name, job_description, experience_file)
     result = crew.kickoff()
-    return str(result)
+    return _clean_letter(str(result))
 
 
 def revise_cover_letter(
@@ -377,4 +380,4 @@ def revise_cover_letter(
     )
 
     result = crew.kickoff()
-    return str(result)
+    return _clean_letter(str(result))
