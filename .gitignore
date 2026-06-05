@@ -34,3 +34,6 @@ skills-lock.json
 
 # Claude.md
 CLAUDE.md
+
+# tracing, admin only
+requirements-tracing.txt

@@ -1,7 +1,4 @@
-crewai[google-genai,anthropic]>=0.28.0
+crewai[anthropic]>=0.28.0
 crewai-tools>=0.1.0
 python-dotenv>=1.0.0
 tavily-python>=0.3.0
-arize-otel>=0.12.0
-openinference-instrumentation-crewai>=1.1.5
-openinference-instrumentation-litellm>=0.1.32
