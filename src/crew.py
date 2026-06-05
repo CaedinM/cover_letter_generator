@@ -376,7 +376,7 @@ def revise_cover_letter(
         agents=[revision_agent],
         tasks=[revision_task],
         process=Process.sequential,
-        verbose=True,
+        verbose=False,
     )
 
     result = crew.kickoff()
