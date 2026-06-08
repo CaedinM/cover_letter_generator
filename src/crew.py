@@ -1,4 +1,8 @@
+import json
 import os
+import re
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 
 from crewai import Agent, Task, Crew, Process, LLM
@@ -7,6 +11,18 @@ from crewai_tools import FileReadTool
 from tavily import TavilyClient
 
 _ROOT_DIR = Path(__file__).parent.parent
+
+JUDGE_THRESHOLD = 7
+MAX_JUDGE_ITERATIONS = 3
+_JUDGE_DIMENSIONS = ["ToneAuthenticity", "Relevancy", "FactualCorrectness", "LengthStructure"]
+
+
+@dataclass
+class JudgeSummary:
+    dimension: str
+    score: int
+    feedback: str
+    passed: bool
 
 
 @tool("Company Research Tool")
@@ -27,6 +43,241 @@ def search_company(query: str) -> str:
         results.append(f"- {r.get('title', 'No title')}: {r.get('content', 'No content')[:500]}")
 
     return "\n".join(results) if results else "No results found."
+
+
+_JUDGE_SYSTEM_PROMPTS = {
+    "ToneAuthenticity": """You are a cover letter quality judge evaluating TONE AND AUTHENTICITY.
+Score the letter 0-10 on these criteria:
+- Absence of AI clichés ("passionate about", "leverage", "synergy", "delve", "keen", "testament to")
+- Absence of robotic sentence patterns (e.g., many sentences starting the same way)
+- Natural human voice with sentence variety and appropriate use of contractions
+- Absence of hollow filler phrases and unnatural formality that add no information
+Score 7+ means the letter reads like a real person wrote it. Below 7 means rewriting is needed.""",
+    "Relevancy": """You are a cover letter quality judge evaluating JOB RELEVANCY.
+Score the letter 0-10 on these criteria:
+- Directly addresses the specific requirements in the job description
+- References the company by name in a specific, non-generic way
+- Connects candidate experience to what this particular role needs
+- Does not read like a generic letter that could apply to any job
+Score 7+ means the letter is clearly targeted to this specific role and company.""",
+    "FactualCorrectness": """You are a cover letter quality judge evaluating FACTUAL CORRECTNESS.
+Score the letter 0-10 on these criteria:
+- Every specific claim (project names, outcomes, metrics, job titles) appears in the experience file
+- No invented years of experience (e.g., "3 years of X" unless stated)
+- No fabricated metrics or achievements not present in the experience file
+- No made-up company names or job titles
+Score 7+ means every claim in the letter can be traced back to the experience file.""",
+    "LengthStructure": """You are a cover letter quality judge evaluating LENGTH AND STRUCTURE.
+Score the letter 0-10 on these criteria:
+- Word count between 200 and 280 words (count carefully)
+- Exactly 4 paragraphs: (1) introduction/company interest, (2) first experience,
+  (3) second experience, (4) closing/excitement
+- Proper greeting and sign-off present
+- No bracket placeholders like [Company] or [Your Name]
+Score 7+ means the letter conforms to the required structure and length.""",
+}
+
+
+def _build_judge_messages(
+    dimension: str,
+    draft: str,
+    job_title: str,
+    company_name: str,
+    job_description: str,
+    experience_content: str,
+) -> list[dict]:
+    """Build the system + user message list for a single judge."""
+    user_message = f"""JOB TITLE: {job_title}
+COMPANY: {company_name}
+
+JOB DESCRIPTION:
+{job_description}
+
+CANDIDATE EXPERIENCE FILE:
+{experience_content}
+
+COVER LETTER TO EVALUATE:
+{draft}
+
+Return ONLY a JSON object with this exact structure:
+{{"score": <integer 0-10>, "feedback": "<one to two sentence assessment>", "passed": <true if score >= 7>}}"""
+
+    return [
+        {"role": "system", "content": _JUDGE_SYSTEM_PROMPTS[dimension]},
+        {"role": "user", "content": user_message},
+    ]
+
+
+def _run_single_judge(dimension: str, messages: list[dict], llm: LLM) -> JudgeSummary:
+    """Run one judge LLM call and parse its JSON verdict. Never raises."""
+    try:
+        raw = llm.call(messages)
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not match:
+            raise ValueError(f"No JSON object found in judge output: {raw!r}")
+        data = json.loads(match.group(0))
+        score = int(data["score"])
+        return JudgeSummary(
+            dimension=dimension,
+            score=score,
+            feedback=str(data.get("feedback", "")),
+            passed=score >= JUDGE_THRESHOLD,
+        )
+    except Exception as e:
+        return JudgeSummary(
+            dimension=dimension,
+            score=0,
+            feedback=f"Judge error: {e}",
+            passed=False,
+        )
+
+
+def _run_judge_panel(
+    draft: str,
+    job_title: str,
+    company_name: str,
+    job_description: str,
+    experience_file: str,
+) -> list[JudgeSummary]:
+    """Run all four judges in parallel and return their summaries in fixed order."""
+    try:
+        with open(experience_file, "r") as f:
+            experience_content = f.read()
+    except FileNotFoundError:
+        experience_content = ""
+
+    judge_llm = LLM(model="claude-haiku-4-5-20251001")
+
+    results_by_dimension: dict[str, JudgeSummary] = {}
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        future_to_dim = {}
+        for dimension in _JUDGE_DIMENSIONS:
+            messages = _build_judge_messages(
+                dimension, draft, job_title, company_name, job_description, experience_content
+            )
+            future = executor.submit(_run_single_judge, dimension, messages, judge_llm)
+            future_to_dim[future] = dimension
+
+        for future, dimension in future_to_dim.items():
+            results_by_dimension[dimension] = future.result()
+
+    return [results_by_dimension[d] for d in _JUDGE_DIMENSIONS]
+
+
+def _run_editor_revision(
+    draft: str,
+    job_title: str,
+    company_name: str,
+    job_description: str,
+    experience_file: str,
+    failures: list[JudgeSummary],
+) -> str:
+    """Re-run the Authenticity Editor with targeted judge feedback. Returns revised letter."""
+    examples_file = str(_ROOT_DIR / "references" / "good_examples.md")
+    examples_section = ""
+    try:
+        with open(examples_file, "r") as f:
+            content = f.read().strip()
+        if content:
+            examples_section = f"""
+
+STYLE AND TONE REFERENCE — GOOD COVER LETTER EXAMPLES:
+The following are examples of strong cover letters. Study them for tone, sentence
+variety, specificity, and structure. Do NOT copy their content — use them only as
+a model for how the final letter should feel.
+
+{content}
+
+END OF EXAMPLES"""
+    except FileNotFoundError:
+        pass
+
+    failure_lines = "\n".join(
+        f"- {f.dimension} (score {f.score}/10): {f.feedback}" for f in failures
+    )
+
+    authenticity_editor = Agent(
+        role="Senior Editorial Proofreader",
+        goal="Ensure cover letters sound authentically human and match the optimal tone for each role",
+        backstory="""You are a veteran editor with 20 years of experience who has
+        developed an expert eye for detecting artificial or templated writing. You
+        know exactly what makes writing sound robotic versus genuine. You understand
+        that different industries and roles require different tones - a startup wants
+        energy and personality, while a law firm expects measured professionalism.
+        You ruthlessly eliminate clichés, buzzwords, and hollow phrases that scream
+        'AI-generated' and replace them with authentic, conversational language that
+        still maintains professionalism.""",
+        verbose=True,
+        allow_delegation=False,
+        llm=LLM(model="claude-sonnet-4-5"),
+    )
+
+    revision_task = Task(
+        description=f"""Review the cover letter and edit it to ensure it sounds
+        authentically human, stays CONCISE, and matches the optimal tone.
+
+        VERIFY THIS STRUCTURE:
+        - Paragraph 1: Candidate introduces themselves + why this role/company (3-4 sentences)
+        - Paragraph 2 & 3: 2 specific experiences with contribution and impact (5-6 sentences)
+        - Paragraph 4: Skills connection + specific excitement + closing (3-4 sentences)
+        - Total: 200-280 words
+
+        MUST CHECK:
+        - If paragraph 1 is missing personal info about the candidate, ADD IT
+        - If the closing lacks genuine excitement about something SPECIFIC to the
+          role or company mission, ADD IT (not generic enthusiasm)
+
+        CRITICAL - REMOVE ANY FABRICATED INFORMATION:
+        - Remove any specific "X years of experience" claims unless verified
+        - Remove any achievements or metrics that seem invented
+        - Remove any job titles or company names not in the experience brief
+        - If something sounds made up or too specific to be true, DELETE IT
+        - When in doubt, use vaguer but honest language
+
+        REMOVE or REWRITE these AI red flags:
+        - Robotic sentence patterns that all start the same way
+        - Excessive formality or stiffness
+        - Filler sentences that don't add value
+        - Em dashes "--"
+
+        ENSURE the letter has:
+        - Natural sentence variety (different lengths, structures)
+        - Specific details that only a human would include
+        - Appropriate tone for the industry (casual for startups, formal for finance/law)
+        - Contractions where natural (I'm, I've, didn't)
+
+        This is the position of "{job_title}" at {company_name}. Job description for tone reference:
+        {job_description}
+        {examples_section}
+
+        CURRENT DRAFT TO REVISE:
+        {draft}
+
+        QUALITY REVIEW FAILURES — MUST FIX ALL OF THESE:
+        {failure_lines}
+
+        Address every failure above while keeping the rest of the letter intact.
+        Output the revised cover letter only - no commentary.""",
+        expected_output="""The final cover letter, edited for authenticity:
+        - Paragraph 1 introduces the candidate AND shows company interest
+        - Paragraphs 2 & 3 have 2 specific experiences with impact
+        - Paragraph 4 ties skills to role and closes
+        - 200-280 words total
+        - Sounds like a real person wrote it
+        - Free of AI clichés and buzzwords
+        - Addresses all quality review failures
+        - Ready to send without further editing""",
+        agent=authenticity_editor,
+    )
+
+    crew = Crew(
+        agents=[authenticity_editor],
+        tasks=[revision_task],
+        process=Process.sequential,
+        verbose=True,
+    )
+
+    return str(crew.kickoff())
 
 
 def create_cover_letter_crew(
@@ -79,6 +330,16 @@ END OF EXAMPLES"""
         llm=haiku,
     )
 
+    # Agent 2: Company Research Agent
+    company_research_agent = Agent(
+        role="Company Research Agent",
+        goal="Research the company and gather information about their mission, values, culture, recent news, and what makes them unique",
+        backstory="""You are an expert at researching companies and gathering information about their mission, values, culture, recent news, and what makes them unique.""",
+        verbose=True,
+        allow_delegation=False,
+        tools=[search_company],
+        llm=haiku,
+    )
     # Agent 2: Experience Strategist
     experience_strategist = Agent(
         role="Career Strategy Consultant",
@@ -321,10 +582,48 @@ def generate_cover_letter(
     job_description: str,
     experience_file: str = str(_ROOT_DIR / "references" / "my_experience.md"),
 ) -> str:
-    """Generate a cover letter for the given job."""
+    """Generate a cover letter for the given job, then run the judge quality loop."""
     crew = create_cover_letter_crew(job_title, company_name, job_description, experience_file)
-    result = crew.kickoff()
-    return _clean_letter(str(result))
+    current_draft = str(crew.kickoff())
+
+    best_letter = current_draft
+    best_avg = -1.0
+
+    for iteration in range(1, MAX_JUDGE_ITERATIONS + 1):
+        print(f"\n{'=' * 60}")
+        print(f"QUALITY REVIEW — Iteration {iteration}/{MAX_JUDGE_ITERATIONS}")
+        print(f"{'=' * 60}")
+        print("Running 4 judges in parallel...")
+
+        summaries = _run_judge_panel(
+            current_draft, job_title, company_name, job_description, experience_file
+        )
+
+        for s in summaries:
+            status = "PASS" if s.passed else "FAIL"
+            print(f"  [{status}] {s.dimension}: {s.score}/10 — {s.feedback}")
+
+        avg = sum(s.score for s in summaries) / len(summaries)
+        failures = [s for s in summaries if not s.passed]
+
+        if avg > best_avg:
+            best_avg = avg
+            best_letter = current_draft
+
+        if not failures:
+            print(f"\nAll judges passed. Letter finalized after {iteration} iteration(s).")
+            return _clean_letter(current_draft)
+
+        if iteration == MAX_JUDGE_ITERATIONS:
+            print(f"\nMax iterations reached. Returning best letter (avg {best_avg:.1f}/10).")
+            return _clean_letter(best_letter)
+
+        print(f"\n{len(failures)} dimension(s) failed — re-running editor with judge feedback...")
+        current_draft = _run_editor_revision(
+            current_draft, job_title, company_name, job_description, experience_file, failures
+        )
+
+    return _clean_letter(best_letter)
 
 
 def revise_cover_letter(
