@@ -2,3 +2,4 @@ crewai[anthropic]>=0.28.0
 crewai-tools>=0.1.0
 python-dotenv>=1.0.0
 tavily-python>=0.3.0
+mcp>=1.2.0

@@ -12,7 +12,13 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from instrumentation import setup_tracing
+try:
+    from instrumentation import setup_tracing
+except ImportError:
+    # instrumentation.py is gitignored (local-only Arize tracing); the tool runs
+    # fine without it, so degrade to a no-op on a fresh clone.
+    def setup_tracing():
+        return None
 
 ROOT_DIR = Path(__file__).parent.parent
 
@@ -28,10 +34,8 @@ def check_setup():
 
     # Check for required API keys
     missing = []
-    if not os.getenv("GEMINI_API_KEY"):
-        missing.append("GEMINI_API_KEY (needed by Job Analyst, Experience Strategist, Cover Letter Writer)")
     if not os.getenv("ANTHROPIC_API_KEY"):
-        missing.append("ANTHROPIC_API_KEY (needed by Authenticity Editor, Revision Agent)")
+        missing.append("ANTHROPIC_API_KEY (needed by all Claude agents and judges)")
     if missing:
         print("Error: missing API keys in .env:")
         for m in missing:
