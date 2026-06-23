@@ -1,6 +1,6 @@
 # Cover Letter Generator
 
-An AI-powered CLI tool that writes tailored cover letters using a multi-agent pipeline. You provide a job description and your background — a team of specialized agents researches the company, maps your experience to the role, drafts a letter, and edits out any AI-sounding language. A panel of LLM judges then scores the draft and sends it back for revision until it passes, before handing it to you for review.
+An AI-powered tool that writes tailored cover letters using a multi-agent pipeline — usable as an interactive CLI or as an [MCP](https://modelcontextprotocol.io) server that other agents can call directly. You provide a job description and your background — a team of specialized agents researches the company, maps your experience to the role, drafts a letter, and edits out any AI-sounding language. A panel of LLM judges then scores the draft and sends it back for revision until it passes, before handing it to you for review.
 
 ---
 
@@ -127,3 +127,55 @@ The agent team and the judge loop run for roughly 1–3 minutes, printing each j
 ```
 
 If you choose `r`, describe the changes you want and the Revision Agent will apply them. You can iterate as many times as needed before saving.
+
+---
+
+## Using It From Another Agent (MCP Server)
+
+The same pipeline is exposed as an [MCP](https://modelcontextprotocol.io) server (`src/mcp_server.py`), so other agents — Claude Code, the Claude Agent SDK, or any MCP-compatible client — can call it programmatically with structured input/output instead of going through the interactive CLI.
+
+It uses the same setup: `.env` with `ANTHROPIC_API_KEY` and `references/my_experience.md` must exist (see [Setup](#setup)).
+
+### Tools exposed
+
+| Tool | Inputs | Returns |
+|---|---|---|
+| `generate_cover_letter` | `job_title`, `company_name`, `job_description`, `experience_file` *(optional — path to an alternate experience file)* | `{ cover_letter, char_count, job_title, company_name }` |
+| `revise_cover_letter` | `current_letter`, `feedback`, `job_title`, `company_name` | `{ cover_letter, char_count }` |
+
+`generate_cover_letter` runs the full crew + judge quality loop (~1–3 minutes per call). `revise_cover_letter` applies a single targeted edit and is much faster.
+
+### Connecting Claude Code
+
+```bash
+claude mcp add-json cover-letter-generator '{"command":"/abs/path/to/python","args":["/abs/path/to/cover_letter_generator/src/mcp_server.py"]}'
+```
+
+Verify it registered with the script path in `args` (not empty), then restart the session:
+
+```bash
+claude mcp get cover-letter-generator
+```
+
+### Connecting any MCP client
+
+Point your client at the server as a stdio process:
+
+```json
+{
+  "mcpServers": {
+    "cover-letter-generator": {
+      "command": "/abs/path/to/python",
+      "args": ["/abs/path/to/cover_letter_generator/src/mcp_server.py"]
+    }
+  }
+}
+```
+
+**Use the absolute path to the Python interpreter** that has the dependencies installed (e.g. your venv's `bin/python` or `which python`), not a bare `python`. MCP clients often launch servers with a minimal `PATH`, and a bare `python` can resolve to a system interpreter that lacks the dependencies — causing the server to fail on launch.
+
+### Notes
+
+- **Transport:** stdio (the MCP default). The server redirects the pipeline's verbose progress output to stderr so it can't corrupt the JSON-RPC stream on stdout.
+- **Tool naming:** most clients namespace the tools as `mcp__cover-letter-generator__generate_cover_letter`, etc. — reference that form in allowlists and prompts.
+- **Timeouts:** a `generate_cover_letter` call can take 1–3 minutes. If your client enforces a short tool-call timeout, raise it.
