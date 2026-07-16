@@ -63,7 +63,7 @@ Agents and tasks are split out of `crew.py`, one module per pipeline step. The m
 **1. Clone the repo**
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/CaedinM/cover_letter_generator
 cd cover_letter_generator
 ```
 
