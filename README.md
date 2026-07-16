@@ -85,13 +85,14 @@ Then open `.env` and fill in your keys:
 
 **4. Add your reference files**
 
-Create a `references/` folder at the project root:
+Copy the template references file at the project root:
 
 ```bash
-mkdir references
+cp -r references.example references
 ```
 
-Inside it, add:
+
+Inside it, fill in the template markdown files with your own information:
 - `references/my_experience.md` **(required)** — your full professional background: work history, projects, skills, and any personal motivations or connections you want the agents to draw on
 - `references/good_examples.md` *(optional)* — examples of cover letters you've written that you're happy with; used to calibrate tone and style
 
@@ -108,8 +109,10 @@ python src/main.py
 You'll be prompted for three inputs:
 
 ```
-Job Title:    > Software Engineer
-Company Name: > Acme Corp
+Job Title:
+> [title]
+Company Name:
+> [company]
 Paste the job description below.
 When finished, enter a blank line followed by 'END' on its own line.
 > [paste JD here]
