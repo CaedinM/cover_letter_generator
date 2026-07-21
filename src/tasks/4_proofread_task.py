@@ -46,7 +46,7 @@ def build_proofread_task(agent, context):
         - Appropriate tone for the industry (casual for startups, formal for finance/law)
         - Contractions where natural (I'm, I've, didn't)
 
-        Reference the job analysis to calibrate the right tone.
+        Reference the company research to calibrate the right tone.
         {examples_section}
         Output the final, edited cover letter only - no commentary.""",
         expected_output="""The final cover letter, edited for authenticity:

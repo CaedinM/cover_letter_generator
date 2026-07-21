@@ -1,7 +1,7 @@
 """Pipeline step 4: Senior Editorial Proofreader (the "Authenticity Editor").
 
 Proofreads the draft for AI clichés, enforces structure, and strips
-fabrications. Also reused by the judge-driven revision loop. Runs on Sonnet.
+fabrications. Runs on Haiku.
 """
 
 from crewai import Agent

@@ -98,10 +98,10 @@ def generate_cover_letter(
 ) -> dict:
     """Generate a tailored cover letter for a job using the multi-agent pipeline.
 
-    Runs the full CrewAI pipeline (job analysis -> experience matching -> writing
-    -> authenticity editing) followed by an LLM-judge quality loop, and returns
-    the best-scoring draft. Facts are drawn only from the candidate's experience
-    file (references/my_experience.md by default); nothing is fabricated.
+    Runs the full CrewAI pipeline (company research + job analysis in parallel ->
+    experience matching -> writing -> authenticity editing) and returns the final
+    draft. Facts are drawn only from the candidate's experience file
+    (references/my_experience.md by default); nothing is fabricated.
 
     Args:
         job_title: The job title being applied for, e.g. "Data Scientist".

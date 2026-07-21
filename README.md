@@ -1,36 +1,30 @@
 # Cover Letter Generator
 
-An AI-powered tool that writes tailored cover letters using a multi-agent pipeline — usable as an interactive CLI or as an [MCP](https://modelcontextprotocol.io) server that other agents can call directly. You provide a job description and your background — a team of specialized agents researches the company, maps your experience to the role, drafts a letter, and edits out any AI-sounding language. A panel of LLM judges then scores the draft and sends it back for revision until it passes, before handing it to you for review.
+An AI-powered tool that writes tailored cover letters using a multi-agent pipeline — usable as an interactive CLI or as an [MCP](https://modelcontextprotocol.io) server that other agents can call directly. You provide a job description and your background — a team of specialized agents researches the company, analyzes the job, maps your experience to the role, drafts a letter, and edits out any AI-sounding language or fabricated claims.
 
 ---
 
 ## How It Works
 
-The pipeline is built with **CrewAI** and runs four agents sequentially, each with a distinct role. The first two agents emit **structured (Pydantic) output** that downstream steps and the judges consume directly:
+The pipeline is built with **CrewAI**. The first two agents run **in parallel** (both depend only on the job description), then the rest run sequentially:
 
 | Step | Agent | Model | Role |
 |---|---|---|---|
-| 1 | Job Analyst | Claude Haiku | Parses the job description and researches the company (via Tavily web search) into a structured `JobAnalysis` |
-| 2 | Experience Strategist | Claude Sonnet | Reads your experience file and produces a `MatchingBrief` mapping each of your strongest experiences to the specific requirements it satisfies |
-| 3 | Cover Letter Writer | Claude Sonnet | Drafts a 4-paragraph, 1600–1900 character letter (intro → two experience paragraphs → close) using only verified facts from the brief |
-| 4 | Authenticity Editor | Claude Sonnet | Removes AI clichés, enforces structure, and deletes any fabricated claims |
+| 1A | Company Researcher | Claude Sonnet 4.5 | Researches the company (via Tavily web search) and summarizes how your background aligns with it |
+| 1B | Job Description Analyst | Claude Sonnet 4.5 | Extracts must-haves, nice-to-haves, key responsibilities, and technical requirements from the job description |
+| 2 | Experience Matcher | Claude Sonnet 5 | Reads your experience file and picks exactly two experiences that map to the job's requirements |
+| 3 | Cover Letter Writer | Claude Haiku 4.5 | Drafts a 3-paragraph, 1600–1900 character letter (opening/closing from the company research, body from the two matched experiences) |
+| 4 | Authenticity Editor | Claude Haiku 4.5 | Removes AI clichés and deletes any claim not grounded in your experience file |
 
-### Quality loop
+### Length enforcement
 
-After the crew produces a draft, it goes through up to **three rounds** of automated review. Each round runs a panel in parallel:
-
-- **Tone & Authenticity** *(LLM judge, scored 0–10)* — flags AI clichés, robotic patterns, and hollow filler
-- **Relevancy** *(LLM judge, scored 0–10)* — uses the `MatchingBrief` to verify each experience the letter discusses actually references the requirements it's meant to satisfy, and that the company is named specifically
-- **Factual Correctness** *(LLM judge, strict pass/fail)* — fails only on hallucinated concrete claims (invented metrics, titles, credentials); embellishment and favorable framing are allowed
-- **Length** *(deterministic Python check)* — measures the character count against the 1600–1900 target (LLMs can't count reliably, so this is done in code)
-
-If any dimension fails, the **Authenticity Editor** is re-run with the judges' targeted feedback. The best-scoring draft across all iterations is returned.
+LLMs can't reliably count characters, so the 1600–1900 character target is checked in plain Python after the crew finishes. If the draft is out of range, the **Authenticity Editor** is re-run (up to 2 attempts) with specific feedback on how much to trim or expand, and the closest draft is returned.
 
 A separate **Revision Agent** (Haiku) handles targeted edits if you request changes after the draft is finalized.
 
 **Infrastructure & integrations:**
-- **Anthropic API** — powers all Claude agents and judges
-- **Tavily** — optional web search for real-time company research
+- **Anthropic API** — powers all Claude agents
+- **Tavily** — web search tool for real-time company research
 
 ---
 
@@ -39,22 +33,25 @@ A separate **Revision Agent** (Haiku) handles targeted edits if you request chan
 ```
 src/
 ├── main.py              CLI entry point: input, generation, revision loop, saving
-├── crew.py              Orchestration: builds the crew + runs the judge quality loop
-├── agents/              One file per pipeline step (build_* agent factories)
-│   ├── 1_senior_job_requirements_agent.py
-│   ├── 2_career_strategy_consultant_agent.py
-│   ├── 3_professional_cover_letter_writer_agent.py
-│   ├── 4_senior_editorial_proofreader_agent.py
-│   └── 5_llm_judges.py          The LLM judges + deterministic length check
-└── tasks/               One file per pipeline step (build_* task factories + prompts)
-    ├── 1_analyze_job_task.py    (JobAnalysis schema)
-    ├── 2_match_experience_task.py  (MatchingBrief schema)
+├── mcp_server.py         MCP server exposing the pipeline as tools
+├── crew.py               Orchestration: builds the crew + enforces the length target
+├── models.py              Model/LLM assignment per agent
+├── tools.py                Tavily search_company tool (used by the Company Researcher)
+├── length_check.py         Deterministic character-count check (LENGTH_MIN/MAX)
+├── agents/               One file per pipeline step (build_* agent factories)
+│   ├── 1a_company_researcher.py
+│   ├── 1b_job_analyst.py
+│   ├── 2_experience_matcher.py
+│   ├── 3_writer.py
+│   └── 4_editor.py
+└── tasks/                One file per pipeline step (build_* task factories + prompts)
+    ├── 1a_company_research_task.py   (CompanyResearch schema)
+    ├── 1b_analyze_job_task.py        (JobAnalysis schema)
+    ├── 2_match_experience_task.py    (ExperienceMatch/MatchedExperience schema)
     ├── 3_write_cover_letter_task.py
     ├── 4_proofread_task.py
-    └── 5_judge_prompts.py        Judge dimensions + system prompts
+    └── length_fix_task.py            Re-runs the editor to fix an out-of-range draft
 ```
-
-Agents and tasks are split out of `crew.py`, one module per pipeline step. The module names are numeric-prefixed (`1_…` through `5_…`), so each package's `__init__.py` loads them via `importlib` and re-exports the factories — import them from the package, e.g. `from agents import build_job_analyst`.
 
 ---
 
@@ -91,10 +88,9 @@ Copy the template references file at the project root:
 cp -r references.example references
 ```
 
-
 Inside it, fill in the template markdown files with your own information:
 - `references/my_experience.md` **(required)** — your full professional background: work history, projects, skills, and any personal motivations or connections you want the agents to draw on
-- `references/good_examples.md` *(optional)* — examples of cover letters you've written that you're happy with; used to calibrate tone and style
+- `references/good_examples.md` *(optional)* — examples of cover letters you've written that you're happy with; used to calibrate tone and style for the Writer and Editor
 
 ---
 
@@ -119,7 +115,7 @@ When finished, enter a blank line followed by 'END' on its own line.
 > END
 ```
 
-The agent team and the judge loop run for roughly 1–3 minutes, printing each judge's verdict per iteration, then the finished letter.
+The agent team runs for roughly 1–3 minutes, printing progress, then the finished letter.
 
 **Review options:**
 
@@ -146,7 +142,7 @@ It uses the same setup: `.env` with `ANTHROPIC_API_KEY` and `references/my_exper
 | `generate_cover_letter` | `job_title`, `company_name`, `job_description`, `experience_file` *(optional — path to an alternate experience file)* | `{ cover_letter, char_count, job_title, company_name }` |
 | `revise_cover_letter` | `current_letter`, `feedback`, `job_title`, `company_name` | `{ cover_letter, char_count }` |
 
-`generate_cover_letter` runs the full crew + judge quality loop (~1–3 minutes per call). `revise_cover_letter` applies a single targeted edit and is much faster.
+`generate_cover_letter` runs the full crew plus the length-enforcement step (~1–3 minutes per call). `revise_cover_letter` applies a single targeted edit and is much faster.
 
 ### Connecting Claude Code
 

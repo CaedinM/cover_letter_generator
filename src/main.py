@@ -35,7 +35,7 @@ def check_setup():
     # Check for required API keys
     missing = []
     if not os.getenv("ANTHROPIC_API_KEY"):
-        missing.append("ANTHROPIC_API_KEY (needed by all Claude agents and judges)")
+        missing.append("ANTHROPIC_API_KEY (needed by all Claude agents)")
     if missing:
         print("Error: missing API keys in .env:")
         for m in missing:
