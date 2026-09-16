@@ -16,11 +16,12 @@ The pipeline is built with **CrewAI**. The first two agents run **in parallel** 
 | 3 | Cover Letter Writer | Claude Haiku 4.5 | Drafts a 3-paragraph, 1600–1900 character letter (opening/closing from the company research, body from the two matched experiences) |
 | 4 | Authenticity Editor | Claude Haiku 4.5 | Removes AI clichés and deletes any claim not grounded in your experience file |
 
-### Length enforcement
+### Revisions
+
+A separate **Revision Agent** (Haiku) handles targeted edits if you request changes after the draft is finalized.
 
 LLMs can't reliably count characters, so the 1600–1900 character target is checked in plain Python after the crew finishes. If the draft is out of range, the **Authenticity Editor** is re-run (up to 2 attempts) with specific feedback on how much to trim or expand, and the closest draft is returned.
 
-A separate **Revision Agent** (Haiku) handles targeted edits if you request changes after the draft is finalized.
 
 **Infrastructure & integrations:**
 - **Anthropic API** — powers all Claude agents
@@ -129,9 +130,9 @@ If you choose `r`, describe the changes you want and the Revision Agent will app
 
 ---
 
-## Using It From Another Agent (MCP Server)
+## Connecting Your Agent (MCP Server)
 
-The same pipeline is exposed as an [MCP](https://modelcontextprotocol.io) server (`src/mcp_server.py`), so other agents — Claude Code, the Claude Agent SDK, or any MCP-compatible client — can call it programmatically with structured input/output instead of going through the interactive CLI.
+The same pipeline is exposed as an MCP server (`src/mcp_server.py`), so other agents — Claude Code, the Claude Agent SDK, or any MCP-compatible client — can call it programmatically with structured input/output instead of going through the interactive CLI.
 
 It uses the same setup: `.env` with `ANTHROPIC_API_KEY` and `references/my_experience.md` must exist (see [Setup](#setup)).
 
